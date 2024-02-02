@@ -13,6 +13,9 @@ from django.contrib.auth.views import LoginView
 
 from django.contrib.auth.views import LoginView, LogoutView
 
+from django.utils import timezone
+from datetime import date
+
 
 def handling_404(request, exception):
     return render(request, '404.html', status=404)
@@ -55,16 +58,30 @@ def register_page(request):
     return render(request, template_name, {'form': form})
 
 @login_required
+@login_required
 def task_list(request):
     template_name = 'base/task_list.html'
     tasks = Task.objects.filter(user=request.user)
     count = tasks.filter(complete=False).count()
 
+    # New: Get upcoming tasks and overdue tasks
+    upcoming_tasks = tasks.filter(due_date__gte=date.today()).order_by('due_date')
+    overdue_tasks = tasks.filter(due_date__lt=date.today(), complete=False).order_by('-due_date')
+
     search_input = request.GET.get('search-area') or ''
     if search_input:
         tasks = tasks.filter(title__contains=search_input)
 
-    return render(request, template_name, {'tasks': tasks, 'count': count, 'search_input': search_input})
+    return render(request, template_name, {
+        'tasks': tasks,
+        'count': count,
+        'search_input': search_input,
+        'upcoming_tasks': upcoming_tasks,
+        'overdue_tasks': overdue_tasks,
+    })
+    
+    
+    
 
 @login_required
 def task_detail(request, pk):
@@ -80,8 +97,9 @@ def task_create(request):
     if request.method == 'POST':
         form = TaskForm(request.POST)
         if form.is_valid():
-            form.instance.user = request.user
-            form.save()
+            task = form.save(commit=False)
+            task.user = request.user
+            task.save()
             return redirect(success_url)
     else:
         form = TaskForm()
