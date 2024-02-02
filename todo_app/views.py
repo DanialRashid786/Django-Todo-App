@@ -1,108 +1,120 @@
-from django.shortcuts import render, get_object_or_404, redirect
-from .models import *
-from .forms import *
-from django.db.models import Q
-
-from django.views.generic.list import ListView
-from django.views.generic.detail import DetailView
-from django.views.generic.edit import CreateView, UpdateView, DeleteView, FormView
-from django.urls import reverse_lazy
-
-from django.contrib.auth.views import LoginView
-from django.contrib.auth.mixins import LoginRequiredMixin
-from django.contrib.auth.forms import UserCreationForm
-from django.contrib.auth import login
-
-# Imports for Reordering Feature
+from django.shortcuts import render, redirect, get_object_or_404
+from django.urls import reverse
+from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth.decorators import login_required
 from django.views import View
-from django.shortcuts import redirect
 from django.db import transaction
+from django.contrib.auth.forms import UserCreationForm
+from django.contrib.auth.models import User
+from .models import Task
+from .forms import *  # Make sure to import TaskForm
+from django.contrib.auth.views import LoginView
 
-# Create your views here.
-def handling_404(request,exception):
-    return render(request,'404.html',{})
+
+from django.contrib.auth.views import LoginView, LogoutView
+
+
+def handling_404(request, exception):
+    return render(request, '404.html', status=404)
 
 def custom_500(request):
     return render(request, '500.html', status=500)
 
-
-
-
 class CustomLoginView(LoginView):
-    template_name = 'login.html'
+    template_name = 'base/login.html'
     fields = '__all__'
     redirect_authenticated_user = True
 
     def get_success_url(self):
-        return reverse_lazy('tasks')
+        return reverse('tasks')
+
+def custom_logout(request):
+    logout(request)
+    return redirect('login')
 
 
-class RegisterPage(FormView):
-    template_name = 'register.html'
+
+def register_page(request):
+    template_name = 'base/register.html'
     form_class = UserCreationForm
-    redirect_authenticated_user = True
-    success_url = reverse_lazy('tasks')
+    success_url = reverse('tasks')
 
-    def form_valid(self, form):
-        user = form.save()
-        if user is not None:
-            login(self.request, user)
-        return super(RegisterPage, self).form_valid(form)
+    if request.method == 'POST':
+        form = form_class(request.POST)
+        if form.is_valid():
+            user = form.save()
+            if user is not None:
+                login(request, user)
+                return redirect(success_url)
+    else:
+        form = form_class()
 
-    def get(self, *args, **kwargs):
-        if self.request.user.is_authenticated:
-            return redirect('tasks')
-        return super(RegisterPage, self).get(*args, **kwargs)
+    if request.user.is_authenticated:
+        return redirect('tasks')
 
+    return render(request, template_name, {'form': form})
 
-class TaskList(LoginRequiredMixin, ListView):
-    model = Task
-    context_object_name = 'tasks'
+@login_required
+def task_list(request):
+    template_name = 'base/task_list.html'
+    tasks = Task.objects.filter(user=request.user)
+    count = tasks.filter(complete=False).count()
 
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context['tasks'] = context['tasks'].filter(user=self.request.user)
-        context['count'] = context['tasks'].filter(complete=False).count()
+    search_input = request.GET.get('search-area') or ''
+    if search_input:
+        tasks = tasks.filter(title__contains=search_input)
 
-        search_input = self.request.GET.get('search-area') or ''
-        if search_input:
-            context['tasks'] = context['tasks'].filter(
-                title__contains=search_input)
+    return render(request, template_name, {'tasks': tasks, 'count': count, 'search_input': search_input})
 
-        context['search_input'] = search_input
+@login_required
+def task_detail(request, pk):
+    template_name = 'base/task.html'
+    task = get_object_or_404(Task, pk=pk, user=request.user)
+    return render(request, template_name, {'task': task})
 
-        return context
+@login_required
+def task_create(request):
+    template_name = 'base/task_form.html'
+    success_url = reverse('tasks')
 
+    if request.method == 'POST':
+        form = TaskForm(request.POST)
+        if form.is_valid():
+            form.instance.user = request.user
+            form.save()
+            return redirect(success_url)
+    else:
+        form = TaskForm()
 
-class TaskDetail(LoginRequiredMixin, DetailView):
-    model = Task
-    context_object_name = 'task'
-    template_name = 'task.html'
+    return render(request, template_name, {'form': form})
 
+@login_required
+def task_update(request, pk):
+    template_name = 'base/task_form.html'
+    success_url = reverse('tasks')
+    task = get_object_or_404(Task, pk=pk, user=request.user)
 
-class TaskCreate(LoginRequiredMixin, CreateView):
-    model = Task
-    fields = ['title', 'description', 'complete']
-    success_url = reverse_lazy('tasks')
+    if request.method == 'POST':
+        form = TaskForm(request.POST, instance=task)
+        if form.is_valid():
+            form.save()
+            return redirect(success_url)
+    else:
+        form = TaskForm(instance=task)
 
-    def form_valid(self, form):
-        form.instance.user = self.request.user
-        return super(TaskCreate, self).form_valid(form)
+    return render(request, template_name, {'form': form})
 
+@login_required
+def task_delete(request, pk):
+    template_name = 'base/task_confirm_delete.html'
+    success_url = reverse('tasks')
+    task = get_object_or_404(Task, pk=pk, user=request.user)
 
-class TaskUpdate(LoginRequiredMixin, UpdateView):
-    model = Task
-    fields = ['title', 'description', 'complete']
-    success_url = reverse_lazy('tasks')
+    if request.method == 'POST':
+        task.delete()
+        return redirect(success_url)
 
-
-class DeleteView(LoginRequiredMixin, DeleteView):
-    model = Task
-    context_object_name = 'task'
-    success_url = reverse_lazy('tasks')
-    def get_queryset(self):
-        owner = self.request.user
-        return self.model.objects.filter(user=owner)
+    return render(request, template_name, {'task': task})
 
 class TaskReorder(View):
     def post(self, request):
@@ -112,6 +124,6 @@ class TaskReorder(View):
             positionList = form.cleaned_data["position"].split(',')
 
             with transaction.atomic():
-                self.request.user.set_task_order(positionList)
+                request.user.set_task_order(positionList)
 
-        return redirect(reverse_lazy('tasks'))
+        return redirect(reverse('tasks'))
